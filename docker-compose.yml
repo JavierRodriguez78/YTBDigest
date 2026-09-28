@@ -1,0 +1,59 @@
+# Uso:
+#   docker compose up -d --build          digest residente, una pasada al día
+#   docker compose logs -f                ver qué ha hecho
+#   docker compose run --rm once          una ejecución suelta (cron/systemd del host)
+#   docker compose run --rm dry           pasada de prueba: imprime, no envía ni marca
+x-common: &common
+  build: .
+  image: yt-digest
+  env_file: .env
+  environment:
+    TZ: Europe/Madrid
+    SUBSCRIPTIONS_FILE: /app/data/subscriptions.csv
+    STATE_FILE: /app/data/state.json
+  volumes:
+    - ./data:/app/data
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # Proceso residente: duerme hasta DAILY_AT, ejecuta, vuelve a dormir.
+  # Para programarlo desde el host con systemd o cron, usa el servicio "once".
+  digest:
+    <<: *common
+    container_name: yt-digest
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Madrid
+      SUBSCRIPTIONS_FILE: /app/data/subscriptions.csv
+      STATE_FILE: /app/data/state.json
+      DAILY_AT: "08:00"
+      # Al levantar el contenedor hace una pasada, sin esperar a mañana.
+      RUN_ON_START: "true"
+
+  # Una única ejecución y sale (para cron/systemd en el host).
+  once:
+    <<: *common
+    profiles: ["tools"]
+    restart: "no"
+    environment:
+      TZ: Europe/Madrid
+      SUBSCRIPTIONS_FILE: /app/data/subscriptions.csv
+      STATE_FILE: /app/data/state.json
+      DAILY_AT: ""
+
+  # Prueba en seco: imprime el digest sin enviarlo ni marcar nada como visto.
+  dry:
+    <<: *common
+    profiles: ["tools"]
+    restart: "no"
+    environment:
+      TZ: Europe/Madrid
+      SUBSCRIPTIONS_FILE: /app/data/subscriptions.csv
+      STATE_FILE: /app/data/state.json
+      DAILY_AT: ""
+      DRY_RUN: "true"
+      LOOKBACK_HOURS: "168"
