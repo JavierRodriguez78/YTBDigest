@@ -17,7 +17,12 @@ function renderItem(v: Video, now: Date): string {
   return `• ${head}\n  ${meta}${note}`;
 }
 
-export function renderDigest(subs: Video[], discovery: Video[], now: Date): string {
+export function renderDigest(
+  subs: Video[],
+  discovery: Video[],
+  now: Date,
+  warning?: string,
+): string {
   const fecha = now.toLocaleDateString('es-ES', {
     weekday: 'long',
     day: 'numeric',
@@ -26,8 +31,16 @@ export function renderDigest(subs: Video[], discovery: Video[], now: Date): stri
 
   const lines: string[] = [`<b>YouTube · ${escapeHtml(fecha)}</b>`];
 
+  if (warning) lines.push('', `⚠️ <b>${escapeHtml(warning)}</b>`);
+
   lines.push('', `<b>De tus suscripciones (${subs.length})</b>`);
-  lines.push(subs.length ? subs.map((v) => renderItem(v, now)).join('\n') : '— Sin novedades.');
+  lines.push(
+    subs.length
+      ? subs.map((v) => renderItem(v, now)).join('\n')
+      : warning
+        ? '— No se pudo consultar.'
+        : '— Sin novedades.',
+  );
 
   if (discovery.length) {
     lines.push('', `<b>Te puede interesar (${discovery.length})</b>`);

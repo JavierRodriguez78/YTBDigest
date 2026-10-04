@@ -1,0 +1,12 @@
+[Unit]
+Description=Lanza el digest de YouTube una vez al día
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+# Si la máquina estaba apagada a las 08:00, lo ejecuta al arrancar.
+Persistent=true
+RandomizedDelaySec=300
+Unit=yt-digest.service
+
+[Install]
+WantedBy=timers.target

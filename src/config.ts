@@ -98,5 +98,19 @@ export const config = {
   /** No marca como vistos ni envía: solo imprime */
   dryRun: bool('DRY_RUN', false),
 
-  concurrency: num('CONCURRENCY', 8),
+  /**
+   * Peticiones simultáneas a los feeds. YouTube responde 404 a las ráfagas,
+   * así que menos es más: 4 con escalonado va sobrado para 100 canales.
+   */
+  concurrency: num('CONCURRENCY', 4),
+
+  /** Milisegundos entre peticiones dentro de cada worker */
+  staggerMs: num('STAGGER_MS', 150),
+
+  /**
+   * Intentos por canal en la primera pasada. Peor caso (todos fallando,
+   * 20 canales, concurrencia 4): unos 2,5 min contando la segunda pasada.
+   * Bájalo a 2 si prefieres que termine rápido aunque pierda algún canal.
+   */
+  feedRetries: num('FEED_RETRIES', 4),
 } as const;

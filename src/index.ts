@@ -25,8 +25,41 @@ async function runOnce(): Promise<void> {
   const subs = await loadSubscriptions(config.subscriptionsFile);
   log(`${subs.length} suscripciones cargadas`);
 
-  const { videos: rawSubVideos, errors } = await fetchSubscriptionVideos(subs, since, config.concurrency);
-  if (errors.length) log(`${errors.length} feeds fallaron: ${errors.slice(0, 3).join(' | ')}`);
+  const {
+    videos: rawSubVideos,
+    errors,
+    okCount,
+    retriesUsed,
+  } = await fetchSubscriptionVideos(
+    subs,
+    since,
+    config.concurrency,
+    config.staggerMs,
+    config.feedRetries,
+  );
+
+  if (retriesUsed > 0) log(`${retriesUsed} reintentos consumidos (YouTube limitando el ritmo)`);
+
+  /** Fallo total: ningún canal respondió. No es un día tranquilo, es una avería. */
+  const allFeedsFailed = okCount === 0 && subs.length > 0;
+
+  if (errors.length) {
+    log(`${errors.length} de ${subs.length} feeds fallaron:`);
+    for (const e of errors.slice(0, 8)) log(`  ${e}`);
+    if (errors.length > 8) log(`  … y ${errors.length - 8} más`);
+  }
+
+  if (allFeedsFailed) {
+    log('');
+    log('AVISO: ningún canal respondió, ni tras los reintentos. Como fallan TODOS,');
+    log('lo más probable es un problema de red o que YouTube esté limitando esta IP,');
+    log('no que tus IDs sean malos. Para distinguirlo:');
+    log('  docker compose run --rm check     verifica los IDs uno por uno');
+    log('Si check los da por válidos, baja CONCURRENCY o sube STAGGER_MS y reintenta.');
+  } else {
+    log(`${okCount} de ${subs.length} feeds OK`);
+  }
+
   log(`${rawSubVideos.length} vídeos nuevos en las últimas ${config.lookbackHours}h`);
 
   // 2. Descubrimiento por temas (requiere API key)
@@ -76,14 +109,20 @@ async function runOnce(): Promise<void> {
     await annotateWithClaude(discoveryVideos, config.anthropicApiKey, config.anthropicModel)
   ).slice(0, config.maxDiscoveryItems);
 
-  if (subVideos.length === 0 && discoveryVideos.length === 0) {
+  if (subVideos.length === 0 && discoveryVideos.length === 0 && !allFeedsFailed) {
     log('nada nuevo que reportar');
     if (!config.dryRun) await state.save();
     return;
   }
 
-  // 5. Entrega
-  const html = renderDigest(subVideos, discoveryVideos, now);
+  // 5. Entrega. El aviso viaja dentro del mensaje: si no, un fallo de red se
+  //    lee como "hoy nadie publicó nada" y puede pasar semanas desapercibido.
+  const warning = allFeedsFailed
+    ? `Ninguno de los ${subs.length} canales respondió (red o límite de YouTube). ` +
+      'La sección de suscripciones está incompleta.'
+    : undefined;
+
+  const html = renderDigest(subVideos, discoveryVideos, now, warning);
   console.log('\n' + toPlainText(html) + '\n');
 
   if (config.telegramBotToken && config.telegramChatId && !config.dryRun) {

@@ -23,6 +23,26 @@ También vale un `.txt` con un channel ID (`UC...`) o una URL de canal por líne
 
 > Nota: YouTube no expone tu feed de suscripciones vía API pública sin OAuth, y Takeout es un fichero que exportas una vez. Si añades canales a menudo, reexporta cada pocos meses o mantén el TXT a mano.
 
+**Verifica el fichero antes de confiar en él:**
+
+```bash
+docker compose run --rm check       # o: npm run check-subs
+```
+
+Comprueba cada ID contra YouTube y te dice el nombre real de cada canal. Un ID puede tener la forma correcta (`UC` + 22 caracteres) y no existir: eso da 404 y el canal se ignora en silencio. El verificador los separa de los bloqueos (403/429), que no son culpa del ID.
+
+**Si solo tienes handles** (`@midudev`) en vez de IDs:
+
+```bash
+docker compose run --rm resolve @midudev @DotCSV > data/subscriptions.csv
+# o desde un fichero de handles, uno por línea:
+npm run resolve-handles -- --file data/handles.txt > data/subscriptions.csv
+```
+
+Los resuelve leyéndolos del propio YouTube (API si hay key, HTML si no), y nunca inventa uno: si no lo encuentra, lo reporta como fallo y no lo escribe.
+
+> Si `check` devuelve 404 en todos los canales, lee antes la sección **El 404 de YouTube no significa lo que parece**: lo más probable es un límite de ritmo, no que los IDs estén mal.
+
 ### 2. API key de YouTube (opcional, solo descubrimiento)
 
 Google Cloud Console → habilitar *YouTube Data API v3* → crear credencial **API key**. Es una key pública de solo lectura, no necesita OAuth.
@@ -93,6 +113,35 @@ curl "https://api.telegram.org/bot<TOKEN>/getUpdates"
 - `BOOST_KEYWORDS` usa coincidencia por palabra completa (`ia` no casa dentro de `familia`).
 - `KEEP_ALL_SUBSCRIPTIONS=true` si prefieres ver todo lo de tus canales aunque publiquen en inglés.
 - Si el filtro de idioma se pasa de estricto, baja el peso mirando `src/filters/language.ts`: es una heurística deliberadamente simple, sin dependencias.
+
+## Diagnóstico
+
+### El 404 de YouTube no significa lo que parece
+
+El endpoint RSS de YouTube devuelve **404, no 429**, cuando decide limitar una ráfaga de peticiones desde una misma IP. Un 404 por tanto **no prueba que el canal no exista**. El síntoma clásico: fallan los 20 canales de golpe, en menos de 200 ms, y los mismos IDs funcionan perfectamente diez minutos después.
+
+Por eso el cliente HTTP trata el 404 como reintentable:
+
+1. Hasta `FEED_RETRIES` intentos por canal, con backoff exponencial y jitter.
+2. Escalonado entre peticiones (`STAGGER_MS`) y concurrencia baja (`CONCURRENCY=4`), para no formar la ráfaga que lo provoca.
+3. Una segunda pasada al final, en serie y sin prisa, solo con los que fallaron.
+
+Un canal se da por caído solo si falla en las dos pasadas. Los canales sanos siguen costando una sola petición.
+
+El log te dice cuánto está apretando YouTube: `16 reintentos consumidos`. Si ese número es alto todos los días, baja `CONCURRENCY` o sube `STAGGER_MS`.
+
+### Tabla de síntomas
+
+| Síntoma en el log | Causa | Qué hacer |
+|---|---|---|
+| Fallan TODOS, en milisegundos, con 404 | Ráfaga limitada por YouTube, o red caída | Los reintentos deberían absorberlo. Si persiste, `check` y bajar `CONCURRENCY` |
+| `HTTP 404 tras N intentos` en uno o dos canales | Ese canal sí está borrado | Quitarlo del fichero |
+| `N reintentos consumidos` alto cada día | Vas demasiado rápido para tu IP | Subir `STAGGER_MS`, bajar `CONCURRENCY` |
+| `[subs] N línea(s) descartadas` | Handles o URLs `/c/` en el fichero | `resolve` para convertirlos |
+| `N suscripciones cargadas` menor de lo esperado | Lo mismo de arriba | Mirar el aviso `[subs]` justo encima |
+| `0 vídeos nuevos` sin errores y con `feeds OK` | Nadie ha publicado en la ventana | Normal. Probar `LOOKBACK_HOURS=168` |
+
+Cuando fallan todos los feeds, el aviso viaja **dentro del mensaje de Telegram**, no solo en el log: si no, una avería de red se lee como "hoy nadie publicó nada" y puede pasar semanas sin que te enteres.
 
 ## Limitaciones conocidas
 

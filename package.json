@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "once": "DAILY_AT= node --env-file-if-exists=.env dist/index.js",
-    "dry-run": "DAILY_AT= DRY_RUN=true node --env-file-if-exists=.env dist/index.js"
+    "dry-run": "DAILY_AT= DRY_RUN=true node --env-file-if-exists=.env dist/index.js",
+    "check-subs": "node --env-file-if-exists=.env dist/scripts/check-subs.js",
+    "resolve-handles": "node --env-file-if-exists=.env dist/scripts/resolve-handles.js"
   },
   "dependencies": {
     "fast-xml-parser": "^4.5.1"

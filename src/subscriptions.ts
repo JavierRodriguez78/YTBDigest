@@ -48,8 +48,11 @@ export async function loadSubscriptions(path: string): Promise<Subscription[]> {
   }
 
   const subs = new Map<string, Subscription>();
+  const skipped: Array<{ line: number; text: string }> = [];
+  let lineNo = 0;
 
   for (const line of raw.split(/\r?\n/)) {
+    lineNo++;
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
 
@@ -67,10 +70,24 @@ export async function loadSubscriptions(path: string): Promise<Subscription[]> {
         break;
       }
     }
-    if (!channelId) continue;
+    if (!channelId) {
+      // La cabecera del CSV de Takeout cae aquí y es normal; cualquier otra
+      // línea descartada es un canal que creías tener y no tienes.
+      if (!/channel\s*id/i.test(trimmed)) skipped.push({ line: lineNo, text: trimmed.slice(0, 70) });
+      continue;
+    }
 
     const title = fields.find((f) => f !== channelId && !f.startsWith('http') && f.length > 0) ?? channelId;
     subs.set(channelId, { channelId, title });
+  }
+
+  if (skipped.length > 0) {
+    console.warn(
+      `[subs] ${skipped.length} línea(s) descartadas por no contener un channel ID (UC + 22 caracteres):`,
+    );
+    for (const s of skipped.slice(0, 10)) console.warn(`[subs]   línea ${s.line}: ${s.text}`);
+    if (skipped.length > 10) console.warn(`[subs]   … y ${skipped.length - 10} más`);
+    console.warn('[subs] Un handle (@canal) o una URL /c/nombre no sirven: usa npm run resolve-handles');
   }
 
   if (subs.size === 0) {

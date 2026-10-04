@@ -3,6 +3,8 @@
 #   docker compose logs -f                ver qué ha hecho
 #   docker compose run --rm once          una ejecución suelta (cron/systemd del host)
 #   docker compose run --rm dry           pasada de prueba: imprime, no envía ni marca
+#   docker compose run --rm check         verifica que tus channel IDs existen
+#   docker compose run --rm resolve @midudev @DotCSV   de handle a channel ID
 x-common: &common
   build: .
   image: yt-digest
@@ -57,3 +59,17 @@ services:
       DAILY_AT: ""
       DRY_RUN: "true"
       LOOKBACK_HOURS: "168"
+
+  # Verifica que cada channel ID del fichero existe de verdad.
+  check:
+    <<: *common
+    profiles: ["tools"]
+    restart: "no"
+    entrypoint: ["node", "dist/scripts/check-subs.js"]
+
+  # De handle a channel ID: docker compose run --rm resolve @midudev @DotCSV
+  resolve:
+    <<: *common
+    profiles: ["tools"]
+    restart: "no"
+    entrypoint: ["node", "dist/scripts/resolve-handles.js"]

@@ -1,0 +1,14 @@
+[Unit]
+Description=Digest diario de YouTube (suscripciones + descubrimiento)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=xavi
+WorkingDirectory=/opt/yt-digest
+ExecStart=/usr/bin/docker compose run --rm once
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

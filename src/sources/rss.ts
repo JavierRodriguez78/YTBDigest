@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { Subscription, Video } from '../types.js';
+import { describeFailure, fetchFeed, type FeedResponse } from './fetch-feed.js';
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -20,12 +21,7 @@ function asArray<T>(v: T | T[] | undefined): T[] {
   return Array.isArray(v) ? v : [v];
 }
 
-async function fetchChannelFeed(sub: Subscription, since: Date, signal: AbortSignal): Promise<Video[]> {
-  const url = `https://www.youtube.com/feeds/videos.xml?channel_id=${sub.channelId}`;
-  const res = await fetch(url, { signal, headers: { 'user-agent': 'yt-digest/1.0' } });
-  if (!res.ok) throw new Error(`RSS ${sub.channelId}: HTTP ${res.status}`);
-
-  const xml = await res.text();
+function parseFeed(xml: string, sub: Subscription, since: Date): Video[] {
   const doc = parser.parse(xml) as { feed?: { entry?: RssEntry | RssEntry[] } };
   const entries = asArray(doc.feed?.entry);
 
@@ -52,29 +48,81 @@ async function fetchChannelFeed(sub: Subscription, since: Date, signal: AbortSig
   return videos;
 }
 
-/** Descarga en paralelo (pool acotado) los feeds de todas las suscripciones. */
+export interface SubscriptionFetchResult {
+  videos: Video[];
+  errors: string[];
+  /** Canales que respondieron bien; si es 0 el problema es de red, no de los IDs */
+  okCount: number;
+  /** Reintentos consumidos en total, para ver si YouTube está apretando */
+  retriesUsed: number;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Descarga los feeds con un pool acotado y un pequeño escalonado entre
+ * peticiones: una ráfaga simultánea es justo lo que YouTube castiga.
+ */
 export async function fetchSubscriptionVideos(
   subs: Subscription[],
   since: Date,
   concurrency: number,
-): Promise<{ videos: Video[]; errors: string[] }> {
+  staggerMs = 150,
+  retries = 4,
+): Promise<SubscriptionFetchResult> {
   const videos: Video[] = [];
-  const errors: string[] = [];
-  const queue = [...subs];
+  let okCount = 0;
+  let retriesUsed = 0;
 
-  const worker = async () => {
+  /** Canales pendientes de una segunda oportunidad */
+  const failures: Array<{ sub: Subscription; res: FeedResponse }> = [];
+
+  const take = (sub: Subscription, res: FeedResponse): boolean => {
+    retriesUsed += res.attempts - 1;
+    if (!res.ok || !res.xml) return false;
+    okCount++;
+    videos.push(...parseFeed(res.xml, sub, since));
+    return true;
+  };
+
+  // --- Primera pasada: pool acotado con escalonado ---
+  const queue = [...subs];
+  const worker = async (slot: number) => {
+    await sleep(slot * staggerMs);
     for (;;) {
       const sub = queue.shift();
       if (!sub) return;
-      const ac = AbortSignal.timeout(15_000);
       try {
-        videos.push(...(await fetchChannelFeed(sub, since, ac)));
+        const res = await fetchFeed(sub.channelId, { retries });
+        if (!take(sub, res)) failures.push({ sub, res });
       } catch (err) {
-        errors.push(`${sub.title}: ${(err as Error).message}`);
+        failures.push({
+          sub,
+          res: { ok: false, status: 'ERR', attempts: 1, error: (err as Error).message },
+        });
       }
+      await sleep(staggerMs);
     }
   };
+  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, (_, i) => worker(i)));
 
-  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
-  return { videos, errors };
+  // --- Segunda pasada: los fallidos, en serie y sin prisa ---
+  // Si YouTube estaba limitando el ritmo, a estas alturas ya ha pasado el pico.
+  const errors: string[] = [];
+  if (failures.length > 0) {
+    await sleep(5_000);
+    for (const { sub, res: firstRes } of failures) {
+      try {
+        const res = await fetchFeed(sub.channelId, { retries: 2, backoffMs: 3000 });
+        if (take(sub, res)) continue;
+        errors.push(`${sub.title} [${sub.channelId}]: ${describeFailure(res)}`);
+      } catch (err) {
+        errors.push(`${sub.title} [${sub.channelId}]: ${(err as Error).message}`);
+        void firstRes;
+      }
+      await sleep(1_000);
+    }
+  }
+
+  return { videos, errors, okCount, retriesUsed };
 }
